@@ -8,7 +8,7 @@ import statistics
 
 from ibm_watson import NaturalLanguageUnderstandingV1
 from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
-from ibm_watson.natural_language_understanding_v1 import Features, CategoriesOptions, EmotionOptions
+from ibm_watson.natural_language_understanding_v1 import Features, CategoriesOptions, EmotionOptions, SentimentOptions
 from ibm_cloud_sdk_core.api_exception import ApiException
 
 
@@ -51,7 +51,7 @@ warringer_dict = {}
 # Watson dictionary for features
 watson_dict = {"Female": {}, "Male": {}}
 
-# List of categories - 20 most relevant (features 29 - 49)
+# List of categories - 20 most relevant (features 29 - 48)
 watson_categories = ['family and parenting', 'society', 'style and fashion', 'science',
                      'art and entertainment', 'health and fitness', 'education',
                      'automotive and vehicles', 'religion and spirituality', 'pets',
@@ -59,8 +59,11 @@ watson_categories = ['family and parenting', 'society', 'style and fashion', 'sc
                      'technology and computing', 'business and industrial',
                      'food and drink', 'shopping', 'law, govt and politics', 'real estate']
 
-# List of emotions - features 50 - 55
+# List of emotions - features 49 - 53
 watson_emotions = ['sadness', 'joy', 'fear', 'disgust', 'anger']
+
+# List of sentiments - features 54-56
+watson_sentiments = ['positive', 'negative', 'neutral']
 
 def extract(comment):
     ''' This function extracts features from a single comment
@@ -72,7 +75,7 @@ def extract(comment):
         feats : numpy Array, a 173-length vector of floating point features (only the first 29 are expected to be filled, here)
     '''
     # List for features data
-    feats = [0.0 for _ in range(173)]
+    feats = [0.0 for _ in range(56)]
 
     # Extract the first sixteen features
     non_punctuation_tokens = get_word_features(feats, comment)
@@ -260,16 +263,18 @@ def load_norms():
                 warringer_dict[first_char] = {}
             warringer_dict[first_char][row[1]] = (float(row[2]), float(row[5]), float(row[8]))
 
-def extract_watson_categories(natural_language_understanding, comment, feats):
+def extract_watson_features(natural_language_understanding, comment, feats):
 
     raw_text = comment["raw_text"]
 
     try:
         # If there are more than ten words, get the most common category for this text
-        if feats[16] * feats[14] > 10:
-            response = natural_language_understanding.analyze(text=raw_text, features=Features(categories=CategoriesOptions(limit=3))).get_result()
+        if feats[16] * feats[14] > 5:
+            response = natural_language_understanding.analyze(text=raw_text,
+                                      features=Features(categories=CategoriesOptions(limit=3),
+                                            emotion=EmotionOptions(), sentiment=SentimentOptions())).get_result()
 
-            # Save this category to the watson category dictionary
+            # Save the category score to feats if it belongs to the watson_categories dict
             if len(response["categories"]) > 0:
                 categories = {}
                 for category in response["categories"]:
@@ -284,25 +289,26 @@ def extract_watson_categories(natural_language_understanding, comment, feats):
                     category = watson_categories[i]
                     feats[j] = categories[category] if category in categories else 0.0
 
+            # Save emotional scores to feats
+            emotions = response["emotion"]["document"]["emotion"]
+            for i in range(len(watson_emotions)):
+                j = i + 49
+                emotion = watson_emotions[i]
+                feats[j] = emotions[emotion]
+
+            # Save sentiment scores to feats
+            sentiment = response["sentiment"]["document"]["label"]
+            score = response["sentiment"]["document"]["score"]
+            for i in range(len(watson_sentiments)):
+                j = i + 54
+                if sentiment == watson_sentiments[i]:
+                    feats[j] = score
+
     except ApiException:
+        print(ApiException)
         pass
 
     return feats
-
-def extract_watson_emotions(natural_language_understanding, comment, feats):
-    raw_text = comment["raw_text"]
-
-    try:
-        response = natural_language_understanding.analyze(text=raw_text, features=Features(emotion=EmotionOptions())).get_result()
-        emotions = response["emotion"]["document"]["emotion"]
-
-        for i in range(len(watson_emotions)):
-            j = i + 50
-            emotion = watson_emotions[i]
-            feats[j] = emotions[emotion]
-    except ApiException:
-        pass
-
 
 def main(args):
     # Authenticate IBM API and set url
@@ -311,9 +317,8 @@ def main(args):
                                                                     authenticator=authenticator)
     natural_language_understanding.set_service_url("https://api.us-south.natural-language-understanding.watson.cloud.ibm.com/instances/3b5aa3c0-8d03-4504-8351-7755bdb736eb")
 
-
     data = json.load(open(args.input))
-    feats = np.zeros((len(data), 173 + 1))
+    feats = np.zeros((len(data), 56 + 1))
 
     # Initialize the Bristol and Warringer dictionaries
     load_norms()
@@ -327,15 +332,12 @@ def main(args):
         # Use extract to find the first 29 features for each data point
         feats[j] = np.append(extract(body), COMMENT_CLASS[comment_class])
 
-        #  Get Watson category features (
-        # extract_watson_categories(natural_language_understanding, comment, feats[j])
-
-        # extract_watson_emotions(natural_language_understanding, comment, feats[j])
+        #  Get Watson categories (features 30 - 56)
+        extract_watson_features(natural_language_understanding, comment, feats[j])
 
 
-
-    print(feats[1])
     # Save feature array to file
+    print(feats.shape)
     np.savez_compressed(args.output, feats)
 
 

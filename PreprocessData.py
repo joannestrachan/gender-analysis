@@ -110,6 +110,7 @@ def main(args):
                     dataOutput.append(item)
 
         # Write output to a file
+        print(len(dataOutput))
         fout = open(args.output, 'w')
         fout.write(json.dumps(dataOutput))
         fout.close()
