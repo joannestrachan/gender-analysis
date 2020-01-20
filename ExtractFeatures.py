@@ -332,7 +332,7 @@ def main(args):
 
         # extract_watson_emotions(natural_language_understanding, comment, feats[j])
 
-        
+
 
     print(feats[1])
     # Save feature array to file
