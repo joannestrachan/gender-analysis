@@ -13,10 +13,11 @@ GENDERS = {"Male": 0, "Female": 0}
 
 def preprocess_text(comment):
     ''' Process comment text and apply nlp tagging and lemma '''
-    processed_comment = clean_text(comment)
-
+    processed_comment = ""
+    comment = comment.rstrip()
     # If the comment was not deleted, keep it in the data set
-    if comment != "[deleted]":
+    if comment != "[deleted]" and comment != "[removed]":
+        processed_comment = clean_text(comment)
         # Get segmented sentences
         sentences = nlp(processed_comment)
 
@@ -82,13 +83,16 @@ def main(args):
 
                 # Process the body of the comment or post
                 gender = "Unknown"
+                old_body = ""
                 new_body = ""
 
                 # Known gender subreddits
                 if "Men" in file_name or "Women" in file_name:
+                    old_body = clean_text(item["body"])
                     new_body = preprocess_text(item["body"])
                     gender = "Male" if "Men" in file_name else "Female"
                 elif "selftext" in item:
+                    old_body = clean_text(item["selftext"])
                     new_body = preprocess_text(item["selftext"])
                     title = item["title"]
                     gender = get_gender(title)
@@ -99,9 +103,10 @@ def main(args):
                 elif gender == "Female":
                     item["gender"] = "Female"
 
-                # If there is still text in the body, save to output
-                if new_body != "":
+                # If there is still text in the body, and there is a gender, save to output
+                if new_body != "" and gender != "Unknown":
                     item["body"] = new_body
+                    item["raw_text"] = old_body
                     dataOutput.append(item)
 
         # Write output to a file

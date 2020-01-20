@@ -6,6 +6,11 @@ import os
 import csv
 import statistics
 
+from ibm_watson import NaturalLanguageUnderstandingV1
+from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
+from ibm_watson.natural_language_understanding_v1 import Features, CategoriesOptions, EmotionOptions
+from ibm_cloud_sdk_core.api_exception import ApiException
+
 
 FIRST_PERSON_PRONOUNS = {
     'i', 'me', 'my', 'mine', 'we', 'us', 'our', 'ours'}
@@ -40,9 +45,22 @@ WHWORDS = {
 COMMENT_CLASS = {'Male': 0, 'Female': 1}
 
 # CSV dictionaries for optimized searching
-bristol_map = {}
-warringer_map = {}
+bristol_dict = {}
+warringer_dict = {}
 
+# Watson dictionary for features
+watson_dict = {"Female": {}, "Male": {}}
+
+# List of categories - 20 most relevant (features 29 - 49)
+watson_categories = ['family and parenting', 'society', 'style and fashion', 'science',
+                     'art and entertainment', 'health and fitness', 'education',
+                     'automotive and vehicles', 'religion and spirituality', 'pets',
+                     'sports', 'hobbies and interests', 'careers', 'finance',
+                     'technology and computing', 'business and industrial',
+                     'food and drink', 'shopping', 'law, govt and politics', 'real estate']
+
+# List of emotions - features 50 - 55
+watson_emotions = ['sadness', 'joy', 'fear', 'disgust', 'anger']
 
 def extract(comment):
     ''' This function extracts features from a single comment
@@ -154,7 +172,7 @@ def bristol_norms_features(feats, non_punctuation_tokens):
     for word in non_punctuation_tokens:
         first_char = word[0]
         try:
-            a_v, i_v, f_v = bristol_map[first_char][word]
+            a_v, i_v, f_v = bristol_dict[first_char][word]
             aoa.append(a_v)
             img.append(i_v)
             fam.append(f_v)
@@ -189,7 +207,7 @@ def warringer_features(feats, non_punctuation_tokens):
     for word in non_punctuation_tokens:
         first_char = word[0]
         try:
-            v_m, a_m, d_m = warringer_map[first_char][word]
+            v_m, a_m, d_m = warringer_dict[first_char][word]
             v_mean.append(v_m)
             a_mean.append(a_m)
             d_mean.append(d_m)
@@ -216,12 +234,11 @@ def load_norms():
     ''' Loads CSV files and saves the data to dictionaries for fast searching. '''
 
     # Load lexical norm CSVs
-    path_to_norms = args.a1_dir[0:args.a1_dir.rfind("/", 0, len(args.a1_dir) - 1)] + "/Wordlists/"
     bristol = "BristolNorms+GilhoolyLogie.csv"
     warringer = "Ratings_Warriner_et_al.csv"
-    warringer = os.path.join(path_to_norms, warringer)
+    warringer = os.path.join(".", warringer)
 
-    bristol = os.path.join(path_to_norms, bristol)
+    bristol = os.path.join(".", bristol)
     bristol_data = open(bristol, 'r')
     bristol_reader = csv.reader(bristol_data, delimiter=",")
     warringer_data = open(warringer, 'r')
@@ -231,20 +248,70 @@ def load_norms():
     for row in bristol_reader:
         if row[1] != "WORD" and row[1] != "":
             first_char = row[1][0]
-            if first_char not in bristol_map:
-                bristol_map[first_char] = {}
-            bristol_map[first_char][row[1]] = (float(row[3]), float(row[4]), float(row[5]))
+            if first_char not in bristol_dict:
+                bristol_dict[first_char] = {}
+            bristol_dict[first_char][row[1]] = (float(row[3]), float(row[4]), float(row[5]))
 
     # Warringer dict
     for row in warringer_reader:
         if row[1] != "Word" and row[1] != "":
             first_char = row[1][0]
-            if first_char not in warringer_map:
-                warringer_map[first_char] = {}
-            warringer_map[first_char][row[1]] = (float(row[2]), float(row[5]), float(row[8]))
+            if first_char not in warringer_dict:
+                warringer_dict[first_char] = {}
+            warringer_dict[first_char][row[1]] = (float(row[2]), float(row[5]), float(row[8]))
+
+def extract_watson_categories(natural_language_understanding, comment, feats):
+
+    raw_text = comment["raw_text"]
+
+    try:
+        # If there are more than ten words, get the most common category for this text
+        if feats[16] * feats[14] > 10:
+            response = natural_language_understanding.analyze(text=raw_text, features=Features(categories=CategoriesOptions(limit=3))).get_result()
+
+            # Save this category to the watson category dictionary
+            if len(response["categories"]) > 0:
+                categories = {}
+                for category in response["categories"]:
+                    label = category["label"]
+                    label = label.strip("/")
+                    label = label[0:label.find("/")] if label.rfind("/") > 0 else label
+                    score = category["score"]
+                    categories[label] = score
+
+                for i in range(len(watson_categories)):
+                    j = i + 29
+                    category = watson_categories[i]
+                    feats[j] = categories[category] if category in categories else 0.0
+
+    except ApiException:
+        pass
+
+    return feats
+
+def extract_watson_emotions(natural_language_understanding, comment, feats):
+    raw_text = comment["raw_text"]
+
+    try:
+        response = natural_language_understanding.analyze(text=raw_text, features=Features(emotion=EmotionOptions())).get_result()
+        emotions = response["emotion"]["document"]["emotion"]
+
+        for i in range(len(watson_emotions)):
+            j = i + 50
+            emotion = watson_emotions[i]
+            feats[j] = emotions[emotion]
+    except ApiException:
+        pass
 
 
 def main(args):
+    # Authenticate IBM API and set url
+    authenticator = IAMAuthenticator(args.key)
+    natural_language_understanding = NaturalLanguageUnderstandingV1(version="2019-07-12",
+                                                                    authenticator=authenticator)
+    natural_language_understanding.set_service_url("https://api.us-south.natural-language-understanding.watson.cloud.ibm.com/instances/3b5aa3c0-8d03-4504-8351-7755bdb736eb")
+
+
     data = json.load(open(args.input))
     feats = np.zeros((len(data), 173 + 1))
 
@@ -255,15 +322,19 @@ def main(args):
     for j in range(len(data)):
         comment = data[j]
         body = comment["body"]
-        comment_class = comment["cat"]
-        comment_id = comment["id"]
+        comment_class = comment["gender"]
 
         # Use extract to find the first 29 features for each data point
         feats[j] = np.append(extract(body), COMMENT_CLASS[comment_class])
 
-        #  Use extract2 to copy LIWC features (features 30-173)
-        feats[j] = extract2(feats[j], comment_class, comment_id)
+        #  Get Watson category features (
+        # extract_watson_categories(natural_language_understanding, comment, feats[j])
 
+        # extract_watson_emotions(natural_language_understanding, comment, feats[j])
+
+        
+
+    print(feats[1])
     # Save feature array to file
     np.savez_compressed(args.output, feats)
 
@@ -272,6 +343,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process each .')
     parser.add_argument("-o", "--output", help="Directs the output to a filename of your choice", required=True)
     parser.add_argument("-i", "--input", help="The input JSON file, preprocessed as in PreprocessData", required=True)
+    parser.add_argument("-k", "--key", help="IBM-Watson API key", required=True)
     args = parser.parse_args()
 
     main(args)
