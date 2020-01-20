@@ -128,9 +128,6 @@ def clean_json(item):
 
     return item
 
-
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process data from Reddit')
     parser.add_argument("-o", "--output", help="Directs the output to a filename of your choice", required=True)
